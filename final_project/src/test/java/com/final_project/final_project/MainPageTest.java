@@ -1,54 +1,147 @@
 package com.final_project.final_project;
 
-import com.codeborne.selenide.Configuration;
-import com.codeborne.selenide.Selenide;
-import com.codeborne.selenide.logevents.SelenideLogger;
-import io.qameta.allure.selenide.AllureSelenide;
+import io.github.bonigarcia.wdm.WebDriverManager;
+import io.qameta.allure.Description;
+import io.qameta.allure.Story;
+import io.restassured.RestAssured;
+import io.restassured.http.ContentType;
+import io.restassured.response.Response;
+import io.restassured.specification.RequestSpecification;
+import org.json.simple.JSONObject;
+import org.openqa.selenium.Alert;
+import org.openqa.selenium.By;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.chrome.ChromeDriver;
+import org.openqa.selenium.support.ui.ExpectedConditions;
+import org.openqa.selenium.support.ui.WebDriverWait;
+import org.testng.Assert;
 import org.testng.annotations.*;
 
-import static org.testng.Assert.*;
-
-import static com.codeborne.selenide.Condition.attribute;
-import static com.codeborne.selenide.Condition.visible;
-import static com.codeborne.selenide.Selenide.*;
 
 public class MainPageTest {
-    MainPage mainPage = new MainPage();
+    WebDriver webDriver;
+    MainPage mainPage;
+    LoginUser loginUser;
+    RequestSpecification httpRequest;
+    String username = UserCredentialsGenerator.generateUsername();
+    String password = UserCredentialsGenerator.generatePassword();
+    JSONObject userCredentials = new JSONObject();
 
-    @BeforeClass
-    public static void setUpAll() {
-        Configuration.browserSize = "1280x800";
-        SelenideLogger.addListener("allure", new AllureSelenide());
+    @BeforeTest
+    public void setUpDriver() {
+        WebDriverManager.chromedriver().setup();
+        webDriver = new ChromeDriver();
+        mainPage = new MainPage(webDriver);
     }
+
 
     @BeforeMethod
     public void setUp() {
-        open("https://www.jetbrains.com/");
+        RestAssured.baseURI = "https://bookstore.toolsqa.com/Account/v1";
+        httpRequest = RestAssured.given();
+
+        userCredentials.put("userName", username);
+        userCredentials.put("password", password);
     }
 
-    @Test
-    public void search() {
-        mainPage.searchButton.click();
+    @Test(description = "register")
+    @Description("register user")
+    public void addUser() {
+        System.out.println(userCredentials);
 
-        $("[data-test='search-input']").sendKeys("Selenium");
-        $("button[data-test='full-search-button']").click();
+        httpRequest.accept(ContentType.JSON).
+                contentType(ContentType.JSON).
+                body(userCredentials);
 
-        $("input[data-test='search-input']").shouldHave(attribute("value", "Selenium"));
+        Response response = httpRequest.post("/User");
+        System.out.println(response.getBody().asString());
+
+        Assert.assertEquals(response.statusCode(), 201);
+
+        AddUserResponse addUserResponse = response.getBody().as(AddUserResponse.class);
+
+        Assert.assertEquals(addUserResponse.books.length, 0);
+
     }
 
-    @Test
-    public void toolsMenu() {
-        mainPage.toolsMenu.hover();
+    @Test(description = "generate token")
+    @Description("generate token for registered user")
+    @Story("success scenario")
+    public void generateToken() {
 
-        $("div[data-test='menu-main-popup-content']").shouldBe(visible);
+        httpRequest.accept(ContentType.JSON).
+                contentType(ContentType.JSON).
+                body(userCredentials);
+
+        Response response = httpRequest.post("/GenerateToken");
+
+        Assert.assertEquals(response.statusCode(), 200);
+        TokenResponse tokenResponse = response.getBody().as(TokenResponse.class);
+        System.out.println(response.getBody().asString());
+        Assert.assertEquals(tokenResponse.status, "Success");
+        Assert.assertEquals(tokenResponse.result, "User authorized successfully.");
     }
 
-    @Test
-    public void navigationToAllTools() {
-        mainPage.seeAllToolsButton.click();
+    @Test (dependsOnMethods = { "generateToken", "addUser" })
+    @Description("check if user is authorized after generate token")
+    public void checkIfUserIsAuthorized() {
+        httpRequest.accept(ContentType.JSON)
+                .contentType(ContentType.JSON)
+                .body(userCredentials);
 
-        $("#products-page").shouldBe(visible);
+        Response response = httpRequest.post("/Authorized");
 
-        assertEquals(Selenide.title(), "All Developer Tools and Products by JetBrains");
+        System.out.println(response.getBody().asString());
     }
+
+    @Test(description = "Authenticate")
+    @Description("authenticate registered user")
+    @Story("correct username and password")
+    public void loginUser() {
+        webDriver.get("https://demoqa.com/login");
+        loginUser = new LoginUser(webDriver);
+
+        loginUser.setUsername(userCredentials.get("userName").toString());
+        loginUser.setPassword(userCredentials.get("password").toString());
+        loginUser.login();
+
+        waitUntil(mainPage.userNameValue);
+        Assert.assertEquals(mainPage.getUsername(), userCredentials.get("userName").toString());
+    }
+
+    @Test(description = "add book to users collection")
+    @Description("add book to user collection and check if book is added")
+    public void validateBookCollection() throws InterruptedException {
+
+        waitUntil(mainPage.gotoStore);
+        mainPage.goToBookStore();
+        waitUntil(mainPage.uDontKnowJsYet);
+        mainPage.chooseBook();
+        waitUntil(mainPage.addNewRecordButton);
+        mainPage.addBookToCollection();
+        waitForAlert();
+        Alert alert = webDriver.switchTo().alert();
+        Assert.assertEquals(alert.getText(), "Book added to your collection.");
+        Thread.sleep(1000);
+        alert.accept();
+
+        waitUntil(mainPage.profileItem);
+        mainPage.goToProfile();
+
+        waitUntil(mainPage.userNameValue);
+        Assert.assertEquals(mainPage.getCollectionBookTitle(), "You Don't Know JS");
+        webDriver.quit();
+
+    }
+
+    public void waitUntil(By element) {
+        WebDriverWait wait = new WebDriverWait(webDriver, 15);
+        wait.until(ExpectedConditions.elementToBeClickable(element));
+    }
+
+    public void waitForAlert() {
+        WebDriverWait wait = new WebDriverWait(webDriver, 15);
+        wait.until(ExpectedConditions.alertIsPresent());
+    }
+
 }
